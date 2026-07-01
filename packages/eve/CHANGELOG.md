@@ -1,5 +1,14 @@
 # eve
 
+## 0.17.3
+
+### Patch Changes
+
+- 7d1084d: fix(eve): remove unnecessary preview deployment check that prevented production access from `eve dev`
+- 63f94f0: Remove optional framework peer dependencies from the published package metadata so installs no longer resolve unused framework packages.
+- ba2e0ce: Create new Vercel projects through `vercel link` instead of posting directly to the projects API. This lets the Vercel CLI apply its framework and local config handling while eve reads the resulting link metadata, keeps framework-specific eve host integrations when detected, and otherwise ensures new projects use the eve framework preset.
+- a75dd47: Vercel sandbox: drop the `runtime` option. eve now always boots its hosted sandboxes from the published eve image.
+
 ## 0.17.2
 
 ### Patch Changes
