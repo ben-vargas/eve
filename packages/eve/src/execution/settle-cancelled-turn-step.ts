@@ -81,7 +81,10 @@ export async function settleCancelledTurnStep(input: {
             registry: bundle.hookRegistry,
           });
         };
-        return { result: await emitCancelledTurn(emit, emissionState), session: enrichedSession };
+        return {
+          result: await emitCancelledTurn(emit, emissionState, enrichedSession.continuationToken),
+          session: enrichedSession,
+        };
       });
       emissionState = scoped.result;
       session = scoped.session;
