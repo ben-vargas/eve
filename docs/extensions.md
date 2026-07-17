@@ -112,6 +112,10 @@ The build uses the package `tsconfig.json` when it emits declarations. Its `incl
 
 The manifest contains only its format, the diagnostic eve build version, and the versions of extension capabilities this package actually uses. It does not contain compiled tools, schemas, names, or executable definitions; the consuming eve still discovers and normalizes the agent-shaped dist tree.
 
+### Workspace development
+
+During local development, `eve dev` automatically rebuilds mounted workspace extensions when their source changes.
+
 ### Dependencies
 
 `eve` is a required wildcard **peer** dependency: one eve lives in the consuming app and the extension's `eve/*` imports resolve to it. The extension's concrete eve version belongs in `devDependencies` for authoring types and build tooling. npm peer semver does not decide extension compatibility; eve validates the generated per-capability requirements. Do not mark the eve peer optional and do not add eve to regular `dependencies`.
