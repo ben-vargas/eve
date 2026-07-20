@@ -16,6 +16,8 @@ import {
 } from "../vercel-project.js";
 import { withSpinner } from "../with-spinner.js";
 
+import type { GatewayCredentialSource } from "#internal/resolve-model-endpoint-status.js";
+
 import { runLinkFlow, type LinkFlowResult } from "./link.js";
 
 export type ProviderConnection = "project" | "own-key" | "external";
@@ -32,7 +34,8 @@ export type ModelProviderStatus =
   | {
       kind: "gateway-key";
       envKey: typeof AI_GATEWAY_API_KEY_ENV_VAR | "VERCEL_OIDC_TOKEN";
-      envFile: string;
+      /** Where the credential lives — an env file, or the shell for a key. */
+      source: GatewayCredentialSource;
     };
 
 export const PROVIDER_QUESTION = "Which model provider do you want to use?";
@@ -118,7 +121,8 @@ function providerOptions(
     hint: "⎿ type your key",
   };
   if (current?.kind === "gateway-key") {
-    ownKey = { ...ownKey, checked: true, hint: `${current.envKey} set in ${current.envFile}` };
+    const where = current.source.kind === "shell" ? "your shell" : current.source.path;
+    ownKey = { ...ownKey, checked: true, hint: `${current.envKey} set in ${where}` };
   }
 
   return [
@@ -258,5 +262,8 @@ export async function runProviderFlow(input: {
   // remaining UI, but the caller must still refresh model access for the key
   // that is now on disk.
   prompter.log.success(`${location.envKey} set.`);
-  return { kind: "done", credential: location.envKey };
+  return {
+    kind: "done",
+    resolution: { credential: "api-key", source: { kind: "env-file", path: location.envFile } },
+  };
 }

@@ -1,3 +1,9 @@
+import {
+  hasEnvValue,
+  resolveGatewayCredential,
+  type GatewayCredentialResolution,
+} from "#internal/resolve-model-endpoint-status.js";
+
 import { inspectApplication } from "#services/inspect-application.js";
 import type {
   AgentModelSettingsPatch,
@@ -126,7 +132,8 @@ export type { ModelProviderStatus };
  * disk — so it never surfaces as an outcome.
  */
 export interface ModelProviderOutcome {
-  credential?: "VERCEL_OIDC_TOKEN" | typeof AI_GATEWAY_API_KEY_ENV_VAR;
+  /** The credential resolution the runtime will honor; see {@link LinkFlowResult}. */
+  resolution?: GatewayCredentialResolution;
   status: ModelProviderStatus;
 }
 
@@ -166,7 +173,8 @@ function providerStatusHint(
         : `${emphasis(provider.projectName)} in ${emphasis(provider.teamName)}`;
     return `AI Gateway (Linked to ${where})`;
   }
-  return `AI Gateway (${provider.envKey} in ${provider.envFile})`;
+  const where = provider.source.kind === "shell" ? "your shell" : provider.source.path;
+  return `AI Gateway (${provider.envKey} in ${where})`;
 }
 
 /**
@@ -283,6 +291,7 @@ function modelMenuRows(
 export async function detectModelProviderStatus(
   appRoot: string,
   options: VercelProjectOperationOptions = {},
+  env: Record<string, string | undefined> = process.env,
 ): Promise<ModelProviderStatus> {
   const [identity, gatewayKeyFile, oidcFile] = await Promise.all([
     detectProjectIdentity(appRoot, options),
@@ -297,13 +306,22 @@ export async function detectModelProviderStatus(
     if (identity.teamName !== undefined) status.teamName = identity.teamName;
     return status;
   }
-  if (gatewayKeyFile !== undefined) {
-    return { kind: "gateway-key", envKey: AI_GATEWAY_API_KEY_ENV_VAR, envFile: gatewayKeyFile };
+  const evidence: { apiKeyInEnv: boolean; apiKeyFile?: string; oidcFile?: string } = {
+    apiKeyInEnv: hasEnvValue(env[AI_GATEWAY_API_KEY_ENV_VAR]),
+  };
+  if (gatewayKeyFile !== undefined) evidence.apiKeyFile = gatewayKeyFile;
+  if (oidcFile !== undefined) evidence.oidcFile = oidcFile;
+  const resolution = resolveGatewayCredential(evidence);
+  if (resolution === undefined) return { kind: "unset" };
+  if (resolution.credential === "api-key") {
+    return { kind: "gateway-key", envKey: AI_GATEWAY_API_KEY_ENV_VAR, source: resolution.source };
   }
-  if (oidcFile !== undefined) {
-    return { kind: "gateway-key", envKey: "VERCEL_OIDC_TOKEN", envFile: oidcFile };
-  }
-  return { kind: "unset" };
+  return {
+    kind: "gateway-key",
+    envKey: "VERCEL_OIDC_TOKEN",
+    // The resolver only reports an OIDC file we handed it, so it is set here.
+    source: { kind: "env-file", path: resolution.file! },
+  };
 }
 
 /**
@@ -497,7 +515,9 @@ export async function runModelFlow(input: {
     // TUI can refresh the state that is already on disk.
     provider = await withSpinner(prompter, "Checking the project…", () => detectProvider(false));
     providerOutcome = { status: provider };
-    if (result.credential !== undefined) providerOutcome.credential = result.credential;
+    if (result.kind === "done" && result.resolution !== undefined) {
+      providerOutcome.resolution = result.resolution;
+    }
     commitDraft = true;
     break;
   }

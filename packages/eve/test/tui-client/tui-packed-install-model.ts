@@ -37,6 +37,7 @@ interface PackedTuiHarness {
   EveTUIRunner: new (options: Record<string, unknown>) => { run(): Promise<void> };
   MockScreen: new (size: { columns: number; rows: number }) => {
     waitForText(text: string, timeoutMs: number): Promise<unknown>;
+    waitForIdlePrompt(timeoutMs: number): Promise<unknown>;
     snapshot(): string;
   };
   MockUserInput: new () => {
@@ -143,7 +144,7 @@ void (async () => {
       await screen.waitForText("Change model", 5_000);
       input.send("\x1b");
       await screen.waitForText("/model dismissed.", 5_000);
-      await screen.waitForText("❯", 5_000);
+      await screen.waitForIdlePrompt(5_000);
 
       input.type("/exit");
       input.enter();

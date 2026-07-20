@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   Client,
@@ -144,6 +144,14 @@ const AGENT_INFO: AgentInfoResult = {
     rootEntries: [],
   },
 };
+
+beforeEach(() => {
+  // The runner normalizes header endpoints from the real process.env; a
+  // developer shell exporting gateway credentials must not leak into these
+  // boot-state assertions.
+  vi.stubEnv("AI_GATEWAY_API_KEY", "");
+  vi.stubEnv("VERCEL_OIDC_TOKEN", "");
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -1392,6 +1400,64 @@ describe("EveTUIRunner replay guards", () => {
       },
     ]);
   });
+
+  it("preserves a rejected action result instead of rendering it as success", async () => {
+    const prompts: Array<string | undefined> = ["run the tool", undefined];
+    const emitted: AgentTUIStreamEvent[] = [];
+    const session = sessionYielding([
+      {
+        type: "actions.requested",
+        data: {
+          actions: [
+            {
+              callId: "call-rejected",
+              input: { command: "rm something" },
+              kind: "tool-call",
+              toolName: "bash",
+            },
+          ],
+          sequence: 0,
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+      },
+      {
+        type: "action.result",
+        data: {
+          error: { code: "USER_REJECTED", message: "Denied by user." },
+          result: {
+            callId: "call-rejected",
+            kind: "tool-result",
+            output: null,
+          },
+          sequence: 0,
+          status: "rejected",
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+      },
+      { type: "session.waiting", data: { wait: "next-user-message" } },
+    ]);
+    const renderer: AgentTUIRenderer = {
+      readPrompt: vi.fn(async () => prompts.shift()),
+      renderStream: vi.fn(async (result) => {
+        for await (const event of result.events as AsyncIterable<AgentTUIStreamEvent>) {
+          emitted.push(event);
+        }
+      }),
+    };
+
+    await new EveTUIRunner({ session, renderer, name: "Weather Agent" }).run();
+
+    expect(emitted.filter((event) => event.type === "tool-result")).toEqual([]);
+    expect(emitted.filter((event) => event.type === "tool-rejected")).toEqual([
+      {
+        type: "tool-rejected",
+        toolCallId: "call-rejected",
+        reason: "Denied by user.",
+      },
+    ]);
+  });
 });
 
 describe("parsePromptCommand", () => {
@@ -1773,6 +1839,86 @@ describe("EveTUIRunner renderer teardown", () => {
     await runner.run();
 
     expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes the section on the child's own turn boundary, before subagent.completed", async () => {
+    const client = stubClient();
+    const childSession = client.session({ sessionId: "child-session", streamIndex: 0 });
+    vi.spyOn(client, "session").mockReturnValue(childSession);
+    vi.spyOn(childSession, "stream").mockImplementation(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: "message.completed",
+          data: {
+            finishReason: "stop",
+            message: "final answer",
+            sequence: 0,
+            stepIndex: 0,
+            turnId: "turn-child",
+          },
+        } as HandleMessageStreamEvent;
+        yield {
+          type: "session.waiting",
+          data: { wait: "next-user-message" },
+        } as HandleMessageStreamEvent;
+      },
+    }));
+
+    const completeSubagent = vi.fn();
+    const completed = createDeferred<void>();
+    const runner = new EveTUIRunner({
+      client,
+      name: "Weather Agent",
+      renderer: fakeRenderer({
+        // Hold the second prompt open until the child boundary finishes the
+        // section — exiting the run loop aborts the child pump.
+        readPrompt: vi
+          .fn()
+          .mockResolvedValueOnce("delegate")
+          .mockImplementationOnce(async () => {
+            await completed.promise;
+            return undefined;
+          }),
+        renderStream: vi.fn(async (result) => {
+          for await (const event of result.events as AsyncIterable<unknown>) void event;
+        }),
+        subagents: {
+          begin: vi.fn(),
+          upsertStep: vi.fn(),
+          upsertTool: vi.fn(),
+          removeTool: vi.fn(),
+          markChildToolCallId: vi.fn(),
+          complete: (update: { callId: string }) => {
+            completeSubagent(update);
+            completed.resolve();
+          },
+        },
+      }),
+      session: sessionYielding([
+        {
+          type: "subagent.called",
+          data: {
+            callId: "call-child",
+            childSessionId: "child-session",
+            name: "weather-child",
+            sequence: 0,
+            sessionId: "parent-session",
+            toolName: "delegate_weather",
+            turnId: "turn-parent",
+            workflowId: "workflow-parent",
+          },
+        },
+        // The parent stream never reports subagent.completed — the child's
+        // own boundary must finish the section.
+        { type: "turn.completed", data: { sequence: 0, turnId: "turn-parent" } },
+        { type: "session.waiting", data: { wait: "next-user-message" } },
+      ]),
+    });
+
+    await runner.run();
+    await completed.promise;
+
+    expect(completeSubagent).toHaveBeenCalledWith({ callId: "call-child" });
   });
 
   it("aborts child-session streams when Ctrl-C exits the runner", async () => {
