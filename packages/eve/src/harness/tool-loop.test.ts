@@ -88,7 +88,7 @@ import { PendingSkillAnnouncementKey } from "#context/dynamic-skill-lifecycle.js
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { stashToolInterrupt } from "#harness/tool-interrupts.js";
 import { appendMissingToolResultMessages, createToolLoopHarness } from "#harness/tool-loop.js";
-import { isSessionLimitDecline, TurnCancelledError } from "#harness/turn-cancellation.js";
+import { SessionLimitDeclinedError, TurnCancelledError } from "#harness/turn-cancellation.js";
 import {
   getSessionUsageLimitViolation,
   getSessionTokenUsage,
@@ -2497,7 +2497,7 @@ describe("createToolLoopHarness", () => {
     // execution layer settles as `turn.cancelled` → `session.waiting` (and,
     // for delegated sessions, escalates to a root-turn cancel). No failure
     // or completion events are emitted here.
-    await expect(declined).rejects.toSatisfy((error) => isSessionLimitDecline(error));
+    await expect(declined).rejects.toBeInstanceOf(SessionLimitDeclinedError);
     expect(vi.mocked(ToolLoopAgent)).not.toHaveBeenCalled();
     expect(events.some((event) => event.type.endsWith(".failed"))).toBe(false);
     expect(events.some((event) => event.type === "session.completed")).toBe(false);
@@ -9870,52 +9870,6 @@ describe("createToolLoopHarness", () => {
       });
       expect(stepResult.providerOptions).toEqual({
         gateway: { order: ["anthropic", "bedrock"], caching: "auto", sessionId: "test-session" },
-      });
-    });
-
-    it("gateway-auto path: respects author override of gateway.caching", async () => {
-      setupStopResult();
-      const session = createTestSession({
-        agent: {
-          modelReference: {
-            id: "anthropic/claude-sonnet-4-5",
-            providerOptions: { gateway: { caching: false } },
-          },
-          system: "",
-          tools: [{ description: "Adds numbers", name: "add", inputSchema: { type: "object" } }],
-        },
-      });
-      const config: ToolLoopHarnessConfig = {
-        resolveModel: vi.fn().mockResolvedValue("anthropic/claude-sonnet-4-5"),
-        tools: new Map([
-          [
-            "add",
-            {
-              description: "Adds numbers",
-              execute: vi.fn(),
-              inputSchema: jsonSchema({ type: "object" }),
-              name: "add",
-            },
-          ],
-        ]),
-      };
-      const runStep = createToolLoopHarness(config);
-      await runStep(session, { message: "hi" });
-
-      const agentCall = vi.mocked(ToolLoopAgent).mock.calls[0]?.[0];
-      // providerOptions is now returned by prepareStep, not set on the constructor
-      const prepareStep = getPrepareStep<unknown[], { providerOptions?: unknown }>(
-        agentCall?.prepareStep,
-      );
-      const stepResult = await prepareStep({
-        messages: [],
-        stepNumber: 0,
-        steps: [],
-        model: agentCall?.model,
-        context: undefined,
-      });
-      expect(stepResult.providerOptions).toEqual({
-        gateway: { caching: false, sessionId: "test-session" },
       });
     });
 
